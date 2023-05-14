@@ -16,7 +16,7 @@ importlib.reload(config)
 
 def print_config_variables():
     importlib.reload(config)
-    print("ver lstm = 0.5.3")
+    print("ver lstm = 0.5.4")
     for key, value in config.__dict__.items():
         if not key.startswith("__"):
             print(key, value)
@@ -99,13 +99,11 @@ def load_and_normalize_data(json_files):
     return samples_ts_norm, samples_q_norm, y_data_norm, norm_parameter
 
 
-def split_data_into_sets(samples_ts, samples_q, y, test_size=0.05, val_size=0.1):
+def split_data_into_sets(samples_ts, val_size=0.1):
     S = np.array(samples_ts).shape[0]
-    test_indices = list(np.random.choice(S, size=int(test_size*S), replace=False))
-    remaining_indices = list(set(range(S)) - set(test_indices))
-    val_indices = list(np.random.choice(remaining_indices, size=int(val_size*S), replace=False))
-    train_indices = list(set(remaining_indices) - set(val_indices))
-    return train_indices, val_indices, test_indices
+    val_indices = list(np.random.choice(S, size=int(val_size*S), replace=False))
+    train_indices = list(set(range(S)) - set(val_indices))
+    return train_indices, val_indices
 
 
 def create_data_loaders(dataset, indices, batch_size):
@@ -130,6 +128,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
         loss = criterion(outputs, y)
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         total_loss += loss.item()
     return total_loss / len(loader)
@@ -229,7 +228,7 @@ def main():
     print("S: {}, E: {}, T: {}, C: {}, Q: {}, O: {}".format(S, E, T, C, Q, O))
 
     # create train and validation data loaders
-    train_indices, val_indices, test_indices = split_data_into_sets(samples_ts, samples_q, y)
+    train_indices, val_indices = split_data_into_sets(samples_ts)
     train_dataset = [(samples_ts[i], samples_q[i], y[i]) for i in range(S)]
     train_loader = create_data_loaders(train_dataset, train_indices, config.BATCH_SIZE)
     val_loader = create_data_loaders(train_dataset, val_indices, config.BATCH_SIZE)
