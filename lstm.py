@@ -16,7 +16,7 @@ importlib.reload(config)
 
 def print_config_variables():
     importlib.reload(config)
-    print("ver lstm = 0.5.1")
+    print("ver lstm = 0.5.3")
     for key, value in config.__dict__.items():
         if not key.startswith("__"):
             print(key, value)
@@ -121,64 +121,64 @@ def define_model(C, Q, O, E, device, hidden_size=128, num_layers=2):
     return model, criterion, optimizer, scheduler
 
 
+def train_epoch(model, loader, criterion, optimizer, device):
+    model.train()
+    total_loss = 0.0
+    for xs, qs, y in loader:
+        xs, qs, y = xs.to(device), qs.to(device), y.to(device)
+        outputs = model(xs, qs)
+        loss = criterion(outputs, y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    return total_loss / len(loader)
+
+
+def validate_epoch(model, loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for xs, qs, y in loader:
+            xs, qs, y = xs.to(device), qs.to(device), y.to(device)
+            outputs = model(xs, qs)
+            loss = criterion(outputs, y)
+            total_loss += loss.item()
+    return total_loss / len(loader)
+
+
+def print_progress(epoch, num_epochs, train_loss, val_loss, start_time, best_val_loss):
+    estimated_time_finished = start_time + (datetime.datetime.now() - start_time) * (num_epochs / (epoch + 1))
+    is_best = val_loss < best_val_loss
+    print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Time: {datetime.datetime.now():%H:%M:%S}, Estimated Finish: {estimated_time_finished:%H:%M:%S} {'*' if is_best else ''}")
+    return is_best
+
+
 def train_model(model, train_loader, val_loader, num_epochs, criterion, optimizer, device):
-    losses, val_losses, best_val_loss = [], [], 99999
+    losses, val_losses = [], []
+    best_val_loss = float('inf')
     start_time = datetime.datetime.now()
+
     for epoch in range(num_epochs):
-        # train the model
-        train_loss = 0
-        for i, (xs, qs, y) in enumerate(train_loader):
-            # Forward pass
-            xs = xs.to(device)
-            qs = qs.to(device)
-            y = y.to(device)
-            outputs = model(xs, qs)
-            loss = criterion(outputs, y)
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+        losses.append(train_loss)
 
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
+        val_loss = validate_epoch(model, val_loader, criterion, device)
+        val_losses.append(val_loss)
 
-            # Optimization step
-            optimizer.step()
-            train_loss += loss.item()
-        losses.append(train_loss / len(train_loader))
+        is_best = print_progress(epoch, num_epochs, train_loss, val_loss, start_time, best_val_loss)
+        if is_best:
+            best_val_loss = val_loss
+            # Uncomment and update with your saving strategy if needed
+            # if epoch > 20:
+            #     pass
 
-        # validate the model
-        val_loss = 0
-        for i, (xs, qs, y) in enumerate(val_loader):
-            xs = xs.to(device)
-            qs = qs.to(device)
-            y = y.to(device)
-            outputs = model(xs, qs)
-            loss = criterion(outputs, y)
-            val_loss += loss.item()
-        val_losses.append(val_loss / len(val_loader))
-
-        # print the progress including the time and the etf and * if a new record is set
-        estimated_time_finished = start_time + (datetime.datetime.now() - start_time) / (epoch + 1) * num_epochs
-
-        epoch_num, total_epochs = epoch + 1, num_epochs
-        train_loss, val_loss = losses[-1], val_losses[-1]
-        current_time = datetime.datetime.now().strftime("%H:%M:%S")
-        finished_time = estimated_time_finished.strftime("%H:%M:%S")
-        best_loss_indicator = '*' if val_loss < best_val_loss else ''
-        
-        print(f"Epoch [{epoch_num}/{total_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Time: {current_time}, Finished: {finished_time} {best_loss_indicator}")
-
-        # new best validation loss if the validation loss has decreased
-        if val_losses[-1] < best_val_loss:
-            best_val_loss = val_losses[-1]
-            if epoch > 20:
-                pass
-                # torch.save(model.state_dict(), config.CHECKPOINT_PATH + "model_{}_{}.pth".format(date, time))
-
-        # break if the validation loss hasn't improved for some epochs
-        if epoch > config.EARLY_STOPPING and not best_val_loss in val_losses[-config.EARLY_STOPPING:]:
+        if epoch > config.EARLY_STOPPING and best_val_loss not in val_losses[-config.EARLY_STOPPING:]:
             print("Early stopping")
             break
     
     return losses, val_losses
+
 
 
 def print_example_predictions(model, loader, norm_parameter, device):
@@ -192,10 +192,12 @@ def print_example_predictions(model, loader, norm_parameter, device):
         outputs = inverse_normilize(outputs, norm_parameter)
         y = inverse_normilize(y, norm_parameter)
         for estimation, real in zip(outputs, y):
+            print("Est", "Real", "Error (%)", sep="\t")
             for el_e, el_r in zip(estimation, real):
                 el_e = el_e.item()
                 el_r = el_r.item()
-                print("estimation: {} - real: {} - rel. error: {}%".format(round(el_e,1), round(el_r,1), round(100*(el_e - el_r) / el_r),1))
+                rel_error = round(100 * (el_e - el_r) / el_r, 1)
+                print(round(el_e, 1), round(el_r, 1), rel_error, sep="\t")
             print("------")
    
 
