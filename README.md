@@ -3,10 +3,13 @@
 ### Abkürzungen
 
 ```
-E: Experiments (Versuche mit gleichem d,k)
 S: Samples (Versuche mit unterschiedlichem d,k)
+E: Experiments (Versuche mit gleichem d,k)
 C: Channel (bspw. fx ist ein Channel)
 T: Time Steps
+Q: Joints
+O: Output
+B: Batch size
 ```
 
 

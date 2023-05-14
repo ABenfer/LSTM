@@ -9,8 +9,7 @@ print("ver data import = 0.3.3")
 
 
 def load_interpolated_data():
-    
-    time_series_names = np.sort([el for el in os.listdir(config.TIME_SERIES_INTERP_PATH) if el.endswith('.csv')])[:config.N_DATA_POINTS]
+    sims_names = np.sort([el for el in os.listdir(config.SIMS_INTERP_PATH) if el.endswith('.json')])[:config.N_DATA_POINTS]
     time_series_keys = ["t", "x", "y", "z", "fx", "fy", "fz"]
     time_serieses = np.array([np.genfromtxt(config.TIME_SERIES_INTERP_PATH + name, delimiter=',') for name in time_series_names])
 
