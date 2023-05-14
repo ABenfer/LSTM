@@ -1,4 +1,4 @@
-print("ver config = 0.4")
+print("ver config = 0.5.1")
 
 # Data import
 DATA_PATH = '/content/'
@@ -21,5 +21,5 @@ N_DATA_POINTS = -1
 LEARNING_RATE = 0.003
 LEARNING_RATE_DECAY = 0.99
 BATCH_SIZE = 16
-EPOCHS = 1
+EPOCHS = 500
 EARLY_STOPPING = 20
