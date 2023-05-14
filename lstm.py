@@ -1,15 +1,17 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import data_import
-from sklearn.preprocessing import MinMaxScaler
-from torch.utils.data import TensorDataset, DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader, Dataset
 from matplotlib import pyplot as plt
 import datetime
 import config
+import importlib
+import os
+import json
 
+importlib.reload(config)
 
-print("ver lstm = 0.3.4")
+print("ver lstm = 0.4.16")
 # print all variables from config
 for key, value in config.__dict__.items():
     if not key.startswith("__"):
@@ -21,87 +23,184 @@ time = now.strftime("%H_%M_%S")
 
 
 class LSTMPredictor(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size):
+    def __init__(self, input_size, hidden_size, num_layers, output_size, q_size, n_experiments):
         super(LSTMPredictor, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc1 = nn.Linear(hidden_size + x_real_size, hidden_size//2)
+        self.fc1 = nn.Linear(hidden_size + q_size, hidden_size//2)
         self.fc2 = nn.Linear(hidden_size//2, hidden_size//4)
-        self.fc3 = nn.Linear(hidden_size//4, output_size)
+        self.fc3 = nn.Linear(n_experiments*hidden_size//4, output_size)
 
-    def forward(self, x, q):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device=x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device=x.device)
-        out, _ = self.lstm(x, (h0, c0))
-        out = self.fc1(torch.concat([out[:,-1,:], q], dim=1))
-        out = self.fc2(out)
-        out = self.fc3(out)
+    def forward(self, xs, qs):
+        B = xs.shape[0]
+        E = xs.shape[1]
+        experiment_outs = []
+        for i in range(E):
+            x = xs[:, i]
+            q = qs[:, i]
+            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device=x.device)
+            c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device=x.device)
+            out, _ = self.lstm(x, (h0, c0))
+            out = self.fc1(torch.cat([out[:,-1,:], q], dim=1))
+            out = self.fc2(out)
+            experiment_outs.append(out)
+        out = torch.cat(experiment_outs, dim=1)
+        out = self.fc3(out.view(B, -1))
         return out
-    
-
-def rescale(x_time_series, x_real_features, y_real_features):
-    # Reshape the input data to 2D arrays
-    ts_data = x_time_series.reshape(x_time_series.shape[0], -1)
-    x_real_data = x_real_features.reshape(x_real_features.shape[0], -1)
-    y_real_data = y_real_features.reshape(y_real_features.shape[0], -1)
-
-    # Create a MinMaxScaler object and fit it to the time series data
-    ts_scaler = MinMaxScaler()
-    ts_scaler.fit(ts_data)
-
-    # Create a separate MinMaxScaler object and fit it to the real data
-    x_real_scaler = MinMaxScaler()
-    x_real_scaler.fit(x_real_data)
-
-    # Create a separate MinMaxScaler object and fit it to the real data
-    y_real_scaler = MinMaxScaler()
-    y_real_scaler.fit(y_real_data)
-
-    # Scale the time series data
-    ts_data_scaled = ts_scaler.transform(ts_data).reshape(x_time_series.shape)
-    # Scale the real data using the same scaler
-    x_real_data_scaled = x_real_scaler.transform(x_real_data).reshape(x_real_features.shape)
-    y_real_data_scaled = y_real_scaler.transform(y_real_data).reshape(y_real_features.shape)
-
-    # Reshape the scaled data back to the original shape
-
-    return ts_data_scaled, x_real_data_scaled, y_real_data_scaled, y_real_scaler
 
 
-def inverse_rescale(y_real_features, real_scaler):
-    # Reshape the input data to 2D arrays
-    real_data = y_real_features.reshape(y_real_features.shape[0], -1)
+class JsonDataset(Dataset):
+    def __init__(self, json_files):
+        # json_files is a list of file paths
+        self.json_files = json_files
+        print("len json_files: ", len(self.json_files))
+        self.data = []
+        for file in self.json_files:
+            with open(file, 'r') as f:
+                self.data.append(json.load(f))
 
-    # Inverse scale the real data using the same scaler
-    real_data_scaled = real_scaler.inverse_transform(real_data)
+        print("len(self.data): ", len(self.data))
 
-    # Reshape the scaled data back to the original shape
-    return real_data_scaled.reshape(y_real_features.shape)
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+
+        k = torch.tensor(item['k']).float()
+        d = torch.tensor(item['d']).float()
+        kd = torch.cat((k, d), 0)
+
+        experiments_ts, experiments_q = [], []
+        for experiment in item['experiments']:
+            time = torch.tensor(experiment['data']['time']).float()
+            fx = torch.tensor(experiment['data']['fx']).float()
+            fy = torch.tensor(experiment['data']['fy']).float()
+            fz = torch.tensor(experiment['data']['fz']).float()
+            x = torch.tensor(experiment['data']['x']).float()
+            y = torch.tensor(experiment['data']['y']).float()
+            z = torch.tensor(experiment['data']['z']).float()
+
+            q = torch.tensor(experiment['q']).float()
+            experiments_ts.append((time, fx, fy, fz, x, y, z))
+            experiments_q.append(q)
+
+        return experiments_ts, experiments_q, kd
 
 
-_, x_time_series, x_real_features, y_real_features = data_import.load_interpolated_data()
 
-# highly doubt dass das gut ist
-# x_time_series[0, -3:, :] = x_time_series[0, -3:, :] + (x_real_features[0,:]*np.ones((x_time_series.shape[2],3))).T
-# reshape x_time_series to switch the last and second last dimension
-x_time_series = np.swapaxes(x_time_series, 1, 2) #[S, C, T] -> [S, T, C]
-# dont use the last three features
-# x_time_series = x_time_series[:, :, :-3]
+def normalize(samples_ts_flattened, samples_q_flattened, y_flattened):
+    # samples_ts_flattened
+    mean_ts = samples_ts_flattened.mean(dim=0, keepdim=True)  # Compute the mean along dimension 'x'
+    std_ts = samples_ts_flattened.std(dim=0, keepdim=True)  # Compute the standard deviation along dimension 'x'
 
-x_time_series, x_real_features, y_real_features, real_scaler = rescale(x_time_series, x_real_features, y_real_features)
+    # Normalize the tensor along dimension 'x'
+    normalized_tensor = (samples_ts_flattened - mean_ts) / (std_ts + 1e-7)  # adding a small constant to prevent division by zero
 
+    # samples_q_flattened
+    mean_q = samples_q_flattened.mean(dim=0, keepdim=True)
+    std_q = samples_q_flattened.std(dim=0, keepdim=True)
+
+    normalized_q = (samples_q_flattened - mean_q) / (std_q + 1e-7)
+
+    # y_flattened
+    mean_y = y_flattened.mean(dim=0, keepdim=True)
+    std_y = y_flattened.std(dim=0, keepdim=True)
+
+    normalized_y = (y_flattened - mean_y) / (std_y + 1e-7)
+
+    # store all scalers in a list
+    norm_parameter = {"mean_ts": mean_ts, "std_ts": std_ts, 
+                      "mean_q": mean_q, "std_q": std_q, 
+                      "mean_y": mean_y, "std_y": std_y}
+
+    return normalized_tensor, normalized_q, normalized_y, norm_parameter
+
+
+def inverse_normilize(normalized_y, norm_parameter):
+    mean_y = norm_parameter["mean_y"]
+    std_y = norm_parameter["std_y"]
+
+    y = normalized_y * std_y + mean_y
+
+    return y
+
+
+def load_and_normalize_data(json_files):
+    dataset = JsonDataset(json_files)
+    samples_ts, samples_q, y = zip(*dataset)
+
+    # Flatten all data for rescaling, sample_ts has shape [S, E, C, T]
+    # flatten everything except channels so final dimension is [S*E*T, C]
+    samples_ts_stacked = torch.stack([torch.stack([torch.stack(sub_sub_list) for sub_sub_list in sub_list]) for sub_list in samples_ts])
+    samples_ts_flattened = samples_ts_stacked.transpose(2,3).flatten(end_dim=2)
+
+    # sample_q has shape [S, E, Q]
+    # flatten everything so final dimension is [S*E, Q]
+    samples_q_stacked = torch.stack([torch.stack(sub_list) for sub_list in samples_q])
+    samples_q_flattened = samples_q_stacked.flatten(end_dim=1)
+
+    y_flattened = torch.stack(y)
+
+    # Rescale the data
+    ts_data_norm, q_data_norm, y_data_norm, norm_parameter = normalize(samples_ts_flattened, samples_q_flattened, y_flattened)
+
+    # Split the rescaled data back into experiments
+    # ts_data_scaled has shape [S*E*T, C]
+    # split into [S, E, T, C]
+    S, E, T, C = samples_ts_stacked.shape
+    samples_ts_norm = ts_data_norm.view(S, -1, C, T).transpose(2,3)
+
+    # q_data_scaled has shape [S*E, Q]
+    # split into [S, E, Q]
+    Q = samples_q_stacked.shape[2]
+    samples_q_norm = q_data_norm.view(S, -1, Q)
+
+    return samples_ts_norm, samples_q_norm, y_data_norm, norm_parameter
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
-num_simulations = x_time_series.shape[0]
-input_size = x_time_series.shape[2]
+
+# Load and rescale data
+json_files = np.sort([config.SIMS_PATH + el for el in os.listdir(config.SIMS_PATH) if el.endswith('.json')])[:]
+samples_ts, samples_q, y, norm_parameter = load_and_normalize_data(json_files)
+
+samples_ts = np.swapaxes(samples_ts, 2, 3) #[S, E, C, T] -> [S, E, T, C]
+
+print("samples_ts.shape: ", np.array(samples_ts).shape) # samples_ts: [S, E, T, C]
+print("samples_q.shape: ", np.array(samples_q).shape) # samples_q: [S, E, Q]
+print("y.shape: ", np.array(y).shape) # y: [S, O]
+
+S = np.array(samples_ts).shape[0]
+E = np.array(samples_ts).shape[1]
+T = np.array(samples_ts).shape[2]
+C = np.array(samples_ts).shape[3]
+Q = np.array(samples_q).shape[2]
+O = np.array(y).shape[1]
+
+
+# Split data into training and validation sets
+test_size, val_size = 0.05, 0.1
+test_indices = list(np.random.choice(S, size=int(test_size*S), replace=False))
+remaining_indices = list(set(range(S)) - set(test_indices))
+val_indices = list(np.random.choice(remaining_indices, size=int(val_size*S), replace=False))
+train_indices = list(set(remaining_indices) - set(val_indices))
+
+train_dataset = [(samples_ts[i], samples_q[i], y[i]) for i in train_indices]
+val_dataset = [(samples_ts[i], samples_q[i], y[i]) for i in val_indices]
+
+# Create train and validation data loaders
+batch_size = config.BATCH_SIZE
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+
+
+
 hidden_size = 128
-x_real_size = x_real_features.shape[1]
 num_layers = 2
-output_size = y_real_features.shape[1]
-model = LSTMPredictor(input_size, hidden_size, num_layers, output_size).to(device)
+model = LSTMPredictor(input_size=C, hidden_size=128, num_layers=2, output_size=O, q_size=Q, n_experiments=E).to(device)
 
 
 criterion = nn.MSELoss()
@@ -110,27 +209,7 @@ scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.LEARN
 
 
 
-x_time_series = torch.tensor(x_time_series).float().to(device)
-x_real_features = torch.tensor(x_real_features).float().to(device)
-y_real_features = torch.tensor(y_real_features).float().to(device)
 
-
-# split the data into train and validation sets
-test_size, val_size = 0.05, 0.1
-num_samples = len(x_time_series)
-test_indices = list(np.random.choice(num_samples, size=int(test_size*num_samples), replace=False))
-remaining_indices = list(set(range(num_samples)) - set(test_indices))
-val_indices = list(np.random.choice(remaining_indices, size=int(val_size*num_samples), replace=False))
-train_indices = list(set(remaining_indices) - set(val_indices))
-
-train_dataset = TensorDataset(x_time_series[train_indices], x_real_features[train_indices], y_real_features[train_indices])
-val_dataset = TensorDataset(x_time_series[val_indices], x_real_features[val_indices], y_real_features[val_indices])
-
-# create train and validation data loaders
-batch_size = config.BATCH_SIZE
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-# val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=SubsetRandomSampler(val_indices))
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 
 num_epochs = config.EPOCHS
@@ -139,9 +218,12 @@ start_time = datetime.datetime.now()
 for epoch in range(num_epochs):
     # train the model
     train_loss = 0
-    for i, (x, q, y) in enumerate(train_loader):
+    for i, (xs, qs, y) in enumerate(train_loader):
         # Forward pass
-        outputs = model(x, q)
+        xs = xs.to(device)
+        qs = qs.to(device)
+        y = y.to(device)
+        outputs = model(xs, qs)
         loss = criterion(outputs, y)
 
         # Backward pass
@@ -155,8 +237,11 @@ for epoch in range(num_epochs):
 
     # validate the model
     val_loss = 0
-    for i, (x, q, y) in enumerate(val_loader):
-        outputs = model(x, q)
+    for i, (xs, qs, y) in enumerate(val_loader):
+        xs = xs.to(device)
+        qs = qs.to(device)
+        y = y.to(device)
+        outputs = model(xs, qs)
         loss = criterion(outputs, y)
         val_loss += loss.item()
     val_losses.append(val_loss / len(val_loader))
@@ -176,7 +261,8 @@ for epoch in range(num_epochs):
     if val_losses[-1] < best_val_loss:
         best_val_loss = val_losses[-1]
         if epoch > 20:
-            torch.save(model.state_dict(), config.CHECKPOINT_PATH + "model_{}_{}.pth".format(date, time))
+            pass
+            # torch.save(model.state_dict(), config.CHECKPOINT_PATH + "model_{}_{}.pth".format(date, time))
 
     # break if the validation loss hasn't improved for some epochs
     if epoch > config.EARLY_STOPPING and not best_val_loss in val_losses[-config.EARLY_STOPPING:]:
@@ -184,30 +270,23 @@ for epoch in range(num_epochs):
         break
 
     
-# print an example predictions
-model.eval()
+# print an example prediction
 with torch.no_grad():
-    test_loss = 0.0
-    for i in range(1):
-        print(x_time_series[test_indices[0:batch_size]].shape)
-        print(y_real_features[test_indices[0:batch_size]].shape)
-        inputs_x = x_time_series[test_indices[0:batch_size]]
-        inputs_y = x_real_features[test_indices[0:batch_size]]
-        # load targets to cpu
-        targets = y_real_features[test_indices[0:batch_size]].cpu()
-        outputs = model(inputs_x, inputs_y).cpu()
-        scaled_targets = inverse_rescale(targets, real_scaler)
-        scaled_outputs = inverse_rescale(outputs, real_scaler)
-        loss = criterion(outputs, targets)
-        test_loss += loss.item()
-        for i in range(len(scaled_outputs)):
-            print("pred", "real", "rel error", sep='\t')
-            for j in range(len(scaled_outputs[i])):
-                pred = scaled_outputs[i][j]
-                real = scaled_targets[i][j]
-                rel_error = (scaled_outputs[i][j] - scaled_targets[i][j])/scaled_targets[i][j]*100
-                print(round(pred), round(real), str(round(rel_error, 1)) + "%", sep='\t')
-            print("--------------------")
+    xs, qs, y = next(iter(val_loader))
+    xs = xs.to(device)
+    qs = qs.to(device)
+    y = y.to(device)
+    norm_parameter = {key: value.to(device) for key, value in norm_parameter.items()}
+    outputs = model(xs, qs)
+    outputs = inverse_normilize(outputs, norm_parameter)
+    y = inverse_normilize(y, norm_parameter)
+    for estimation, real in zip(outputs, y):
+        for el_e, el_r in zip(estimation, real):
+            el_e = el_e.item()
+            el_r = el_r.item()
+            print("estimation: {} - real: {} - rel. error: {}%".format(round(el_e,1), round(el_r,1), round(100*(el_e - el_r) / el_r),1))
+        print("------")
+        
 
 
 # plot the training and validation loss
@@ -216,17 +295,42 @@ plt.plot(val_losses, label='Validation loss')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.title("Samples: {}, Data Points: {}, Batch size: {}, Learning rate: {}"
-          .format(config.N_SAMPLES, x_time_series.shape[0], config.BATCH_SIZE, config.LEARNING_RATE))
+          .format(S, T, config.BATCH_SIZE, config.LEARNING_RATE))
 plt.grid()
 plt.ylim(bottom=0)
 plt.legend()
 plt.savefig(config.PLOT_PATH + "model_{}_{}.png".format(date, time))
 
 
-# TODOS
 
-# TODO: zip and unzip the data -> DONE
-# TODO: no joint angles -> DONE
-# TODO: multiple experiments
-# TODO: move data to separate folder -> DONE
-# TODO: data_prep divide in two files
+# x_time_series = torch.tensor(x_time_series).float().to(device)
+# x_real_features = torch.tensor(x_real_features).float().to(device)
+# y_real_features = torch.tensor(y_real_features).float().to(device)
+
+
+# # split the data into train and validation sets
+# test_size, val_size = 0.05, 0.1
+# num_samples = len(x_time_series)
+# test_indices = list(np.random.choice(num_samples, size=int(test_size*num_samples), replace=False))
+# remaining_indices = list(set(range(num_samples)) - set(test_indices))
+# val_indices = list(np.random.choice(remaining_indices, size=int(val_size*num_samples), replace=False))
+# train_indices = list(set(remaining_indices) - set(val_indices))
+
+# train_dataset = TensorDataset(x_time_series[train_indices], x_real_features[train_indices], y_real_features[train_indices])
+# val_dataset = TensorDataset(x_time_series[val_indices], x_real_features[val_indices], y_real_features[val_indices])
+
+# usage
+# json_files = np.sort([el for el in os.listdir(config.SIMS_INTERP_PATH) if el.endswith('.json')])[:config.N_DATA_POINTS]
+# dataset = JsonDataset(json_files)
+# loader = DataLoader(dataset, batch_size=10, shuffle=True)
+
+# split the data into train and validation sets
+# rescale data
+# maybe swap axes
+
+
+# create train and validation data loaders
+# batch_size = config.BATCH_SIZE
+# train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+# # val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=SubsetRandomSampler(val_indices))
+# val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
