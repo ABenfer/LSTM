@@ -107,11 +107,15 @@ def split_data_into_sets(samples_ts, val_size=0.1):
 
 
 def create_data_loaders(dataset, indices, batch_size):
-    return DataLoader([dataset[i] for i in indices], batch_size=batch_size, shuffle=True)
+    return DataLoader([dataset[i] for i in indices], batch_size=batch_size, shuffle=True, num_workers=4)
 
 
 def define_model(C, Q, O, E, device, hidden_size=128, num_layers=2):
-    model = LSTMPredictor(input_size=C, hidden_size=128, num_layers=2, output_size=O, q_size=Q, n_experiments=E).to(device)
+    model = LSTMPredictor(input_size=C, hidden_size=128, num_layers=2, output_size=O, q_size=Q, n_experiments=E)
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+        model = nn.DataParallel(model)
+    model.to(device)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.LEARNING_RATE_DECAY)
@@ -248,38 +252,3 @@ def main():
 if __name__ == "__main__":
     main()
     
-
-
-
-
-# x_time_series = torch.tensor(x_time_series).float().to(device)
-# x_real_features = torch.tensor(x_real_features).float().to(device)
-# y_real_features = torch.tensor(y_real_features).float().to(device)
-
-
-# # split the data into train and validation sets
-# test_size, val_size = 0.05, 0.1
-# num_samples = len(x_time_series)
-# test_indices = list(np.random.choice(num_samples, size=int(test_size*num_samples), replace=False))
-# remaining_indices = list(set(range(num_samples)) - set(test_indices))
-# val_indices = list(np.random.choice(remaining_indices, size=int(val_size*num_samples), replace=False))
-# train_indices = list(set(remaining_indices) - set(val_indices))
-
-# train_dataset = TensorDataset(x_time_series[train_indices], x_real_features[train_indices], y_real_features[train_indices])
-# val_dataset = TensorDataset(x_time_series[val_indices], x_real_features[val_indices], y_real_features[val_indices])
-
-# usage
-# json_files = np.sort([el for el in os.listdir(config.SIMS_INTERP_PATH) if el.endswith('.json')])[:config.N_DATA_POINTS]
-# dataset = JsonDataset(json_files)
-# loader = DataLoader(dataset, batch_size=10, shuffle=True)
-
-# split the data into train and validation sets
-# rescale data
-# maybe swap axes
-
-
-# create train and validation data loaders
-# batch_size = config.BATCH_SIZE
-# train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-# # val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=SubsetRandomSampler(val_indices))
-# val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
