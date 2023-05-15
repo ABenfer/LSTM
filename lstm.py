@@ -14,6 +14,13 @@ from JsonDataset import JsonDataset
 importlib.reload(config)
 
 
+def create_directories():
+    if not os.path.exists(config.CHECKPOINT_PATH):
+        os.makedirs(config.CHECKPOINT_PATH)
+    if not os.path.exists(config.PLOT_PATH):
+        os.makedirs(config.PLOT_PATH)
+
+
 def print_config_variables():
     importlib.reload(config)
     print("ver lstm = 0.5.9")
@@ -222,6 +229,7 @@ def plot_losses(losses, val_losses, date, time, S, T):
 
 
 def main():
+    create_directories()
     print_config_variables()
     date, time = get_current_date_and_time()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
