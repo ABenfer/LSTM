@@ -16,7 +16,7 @@ importlib.reload(config)
 
 def print_config_variables():
     importlib.reload(config)
-    print("ver lstm = 0.5.4")
+    print("ver lstm = 0.5.9")
     for key, value in config.__dict__.items():
         if not key.startswith("__"):
             print(key, value)
@@ -128,7 +128,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
         loss = criterion(outputs, y)
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
         optimizer.step()
         total_loss += loss.item()
     return total_loss / len(loader)
@@ -153,7 +153,7 @@ def print_progress(epoch, num_epochs, train_loss, val_loss, start_time, best_val
     return is_best
 
 
-def train_model(model, train_loader, val_loader, num_epochs, criterion, optimizer, device):
+def train_model(model, train_loader, val_loader, num_epochs, criterion, optimizer, device, date, time):
     losses, val_losses = [], []
     best_val_loss = float('inf')
     start_time = datetime.datetime.now()
@@ -168,13 +168,17 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
         is_best = print_progress(epoch, num_epochs, train_loss, val_loss, start_time, best_val_loss)
         if is_best:
             best_val_loss = val_loss
-            # Uncomment and update with your saving strategy if needed
-            # if epoch > 20:
-            #     pass
+            if epoch > 20:
+                torch.save(model.state_dict(), config.CHECKPOINT_PATH + "model_{}_{}.pt".format(date, time))
 
         if epoch > config.EARLY_STOPPING and best_val_loss not in val_losses[-config.EARLY_STOPPING:]:
             print("Early stopping")
             break
+
+        # if loss is twice as large as last one, load last best model
+        if epoch > 30 and val_losses[-1] > 2 * val_losses[-2]:
+            print("Loss is too large, loading last best model")
+            model.load_state_dict(torch.load(config.CHECKPOINT_PATH + "model_{}_{}.pt".format(date, time)))
     
     return losses, val_losses
 
@@ -235,7 +239,7 @@ def main():
 
     # Define the model
     model, criterion, optimizer, scheduler = define_model(C, Q, O, E, device)
-    losses, val_losses = train_model(model, train_loader, val_loader, config.EPOCHS, criterion, optimizer, device)
+    losses, val_losses = train_model(model, train_loader, val_loader, config.EPOCHS, criterion, optimizer, device, date, time)
 
     print_example_predictions(model, val_loader, norm_parameter, device)
     plot_losses(losses, val_losses, date, time, S, T)

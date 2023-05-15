@@ -1,4 +1,4 @@
-print("ver config = 0.5.1")
+print("ver config = 0.5.9")
 
 # Data import
 DATA_PATH = '/content/'
@@ -18,8 +18,8 @@ N_DATA_POINTS = -1
 # N_SAMPLES = 1000
 
 # Model
-LEARNING_RATE = 0.003
-LEARNING_RATE_DECAY = 0.99
-BATCH_SIZE = 16
-EPOCHS = 500
-EARLY_STOPPING = 20
+LEARNING_RATE = 0.005
+LEARNING_RATE_DECAY = 0.995
+BATCH_SIZE = 64
+EPOCHS = 400
+EARLY_STOPPING = 50
